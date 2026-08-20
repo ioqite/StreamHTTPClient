@@ -9,16 +9,45 @@
   #if defined(ESP32)
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
+    // xTaskCreateUniversal signature changed between Arduino-ESP32 v2 and v3
+    // (v3 added an xCoreID parameter at the end). xTaskCreatePinnedToCore has
+    // a stable signature across all versions, so we use it directly.
   #else
     #include <FreeRTOS.h>
     #include <task.h>
   #endif
   #define SHC_TASK_TYPE TaskHandle_t
-  #define SHC_TASK_CREATE(name, stack, prio, core, handle)         \
-      xTaskCreateUniversal(taskEntry, name, stack, this, prio,     \
-                           (TaskHandle_t*)&handle)
-  #define SHC_TASK_DELETE(handle) vTaskDelete((TaskHandle_t)handle)
+  #define SHC_TASK_DELETE(handle) vTaskDelete((TaskHandle_t)(handle))
   #define SHC_TASK_DELAY_MS(ms)   vTaskDelay(pdMS_TO_TICKS(ms))
+
+  // Spawn the async task. Returns pdPASS on success. Implementation chosen
+  // per-platform so we work across Arduino-ESP32 v2/v3, RP2040, etc.
+  static inline BaseType_t shcSpawnAsyncTask(TaskFunction_t entry,
+                                              const char* name,
+                                              uint32_t stack,
+                                              void* arg,
+                                              UBaseType_t prio,
+                                              TaskHandle_t* handle) {
+#if defined(ESP32)
+      // On ESP32 we use xTaskCreatePinnedToCore so we can target a specific
+      // core or fall back to "any core" via tskNO_AFFINITY. This function has
+      // a stable signature in both Arduino-ESP32 v2.x and v3.x.
+      BaseType_t core_id;
+  #if CONFIG_FREERTOS_UNICORE
+      // Single-core variant (ESP32-S2, ESP32-C3, ESP32-S3 with unicore, ...).
+      core_id = 0;
+  #else
+      // Dual-core: tskNO_AFFINITY lets the scheduler choose.
+      core_id = (SHC_ASYNC_TASK_CORE >= 0 && SHC_ASYNC_TASK_CORE < portNUM_PROCESSORS)
+                ? (BaseType_t)SHC_ASYNC_TASK_CORE
+                : tskNO_AFFINITY;
+  #endif
+      return xTaskCreatePinnedToCore(entry, name, stack, arg, prio, handle, core_id);
+#else
+      // Generic FreeRTOS (RP2040, etc.) - xTaskCreate with no core pinning.
+      return xTaskCreate(entry, name, stack, arg, prio, handle);
+#endif
+  }
 #else
   #define SHC_TASK_TYPE void*
   #define SHC_TASK_DELAY_MS(ms) delay(ms)
@@ -60,12 +89,13 @@ bool StreamHTTPClient_AsyncImpl::start(const char* method, const String& body) {
 
 #if SHC_HAS_FREERTOS
     if (_use_task) {
-        SHC_TASK_TYPE h = nullptr;
-        BaseType_t r = SHC_TASK_CREATE("shc_async",
-                                       SHC_ASYNC_TASK_STACK,
-                                       SHC_ASYNC_TASK_PRIORITY,
-                                       SHC_ASYNC_TASK_CORE,
-                                       h);
+        TaskHandle_t h = nullptr;
+        BaseType_t r = shcSpawnAsyncTask((TaskFunction_t)taskEntry,
+                                         "shc_async",
+                                         SHC_ASYNC_TASK_STACK,
+                                         this,
+                                         SHC_ASYNC_TASK_PRIORITY,
+                                         &h);
         if (r != pdPASS) {
             _last_err = SHC_ERROR_TASK_CREATE;
             _running = false;
@@ -95,12 +125,13 @@ bool StreamHTTPClient_AsyncImpl::start(const char* method, uint8_t* body, size_t
 
 #if SHC_HAS_FREERTOS
     if (_use_task) {
-        SHC_TASK_TYPE h = nullptr;
-        BaseType_t r = SHC_TASK_CREATE("shc_async",
-                                       SHC_ASYNC_TASK_STACK,
-                                       SHC_ASYNC_TASK_PRIORITY,
-                                       SHC_ASYNC_TASK_CORE,
-                                       h);
+        TaskHandle_t h = nullptr;
+        BaseType_t r = shcSpawnAsyncTask((TaskFunction_t)taskEntry,
+                                         "shc_async",
+                                         SHC_ASYNC_TASK_STACK,
+                                         this,
+                                         SHC_ASYNC_TASK_PRIORITY,
+                                         &h);
         if (r != pdPASS) {
             _last_err = SHC_ERROR_TASK_CREATE;
             _running = false;
@@ -130,12 +161,13 @@ bool StreamHTTPClient_AsyncImpl::start(const char* method, Stream* body, size_t 
 
 #if SHC_HAS_FREERTOS
     if (_use_task) {
-        SHC_TASK_TYPE h = nullptr;
-        BaseType_t r = SHC_TASK_CREATE("shc_async",
-                                       SHC_ASYNC_TASK_STACK,
-                                       SHC_ASYNC_TASK_PRIORITY,
-                                       SHC_ASYNC_TASK_CORE,
-                                       h);
+        TaskHandle_t h = nullptr;
+        BaseType_t r = shcSpawnAsyncTask((TaskFunction_t)taskEntry,
+                                         "shc_async",
+                                         SHC_ASYNC_TASK_STACK,
+                                         this,
+                                         SHC_ASYNC_TASK_PRIORITY,
+                                         &h);
         if (r != pdPASS) {
             _last_err = SHC_ERROR_TASK_CREATE;
             _running = false;
@@ -166,12 +198,13 @@ bool StreamHTTPClient_AsyncImpl::startStream(const char* method, Stream* upload,
 
 #if SHC_HAS_FREERTOS
     if (_use_task) {
-        SHC_TASK_TYPE h = nullptr;
-        BaseType_t r = SHC_TASK_CREATE("shc_async",
-                                       SHC_ASYNC_TASK_STACK,
-                                       SHC_ASYNC_TASK_PRIORITY,
-                                       SHC_ASYNC_TASK_CORE,
-                                       h);
+        TaskHandle_t h = nullptr;
+        BaseType_t r = shcSpawnAsyncTask((TaskFunction_t)taskEntry,
+                                         "shc_async",
+                                         SHC_ASYNC_TASK_STACK,
+                                         this,
+                                         SHC_ASYNC_TASK_PRIORITY,
+                                         &h);
         if (r != pdPASS) {
             _last_err = SHC_ERROR_TASK_CREATE;
             _running = false;

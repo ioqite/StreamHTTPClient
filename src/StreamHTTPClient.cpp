@@ -12,6 +12,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(ESP32)
+  // For TCP keepalive socket options (SO_KEEPALIVE / TCP_KEEPIDLE / ...).
+  // The Arduino-ESP32 v2.x had WiFiClient::setKeepAlive(), but it was
+  // removed in v3.x where the class was renamed to NetworkClient. We use
+  // setsockopt() directly so we work on both versions.
+  #include <lwip/sockets.h>
+  #include <lwip/inet.h>  // for IPPROTO_TCP
+#endif
+
 // ---------------------------------------------------------------------------
 // Helpers - keep these file-local (static)
 // ---------------------------------------------------------------------------
@@ -362,22 +371,12 @@ bool StreamHTTPClient::ensureTransport() {
         return false;
     }
 
-    // Set up TCP keep-alive parameters on the owned transport before connect.
+    // Pick the transport (TCP or TLS) and connect first - TCP keep-alive
+    // socket options must be set on an open socket, so we apply them *after*
+    // connect() returns.
     if (_https) {
-#ifdef ESP32
-        if (_tcp_keepalive_set) {
-            _tls.setKeepAlive(_tcp_keepalive_cnt, _tcp_keepalive_idle,
-                              _tcp_keepalive_intv);
-        }
-#endif
         _client = &_tls;
     } else {
-#ifdef ESP32
-        if (_tcp_keepalive_set) {
-            _tcp.setKeepAlive(_tcp_keepalive_cnt, _tcp_keepalive_idle,
-                              _tcp_keepalive_intv);
-        }
-#endif
         _client = &_tcp;
     }
 
@@ -386,6 +385,34 @@ bool StreamHTTPClient::ensureTransport() {
         _client = nullptr;
         return false;
     }
+
+#if defined(ESP32)
+    // Apply TCP keep-alive on the freshly-opened socket.
+    //
+    // We use setsockopt() directly because WiFiClient::setKeepAlive() /
+    // NetworkClient::setKeepAlive() is missing on many framework versions
+    // (notably Arduino-ESP32 v3.x renamed the classes to NetworkClient*
+    // and dropped the helper). The socket options themselves are universally
+    // supported by the underlying lwIP stack.
+    //
+    // On Arduino-ESP32 v3.x, WiFiClient is typedef'd to NetworkClient which
+    // still exposes fd() (returns the lwIP socket file descriptor).
+    if (_tcp_keepalive_set) {
+        int fd = _client->fd();
+        if (fd >= 0) {
+            int v;
+            v = 1;
+            setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &v, sizeof(v));
+            v = (int)_tcp_keepalive_idle;
+            setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &v, sizeof(v));
+            v = (int)_tcp_keepalive_intv;
+            setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &v, sizeof(v));
+            v = (int)_tcp_keepalive_cnt;
+            setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &v, sizeof(v));
+        }
+    }
+#endif
+
     return true;
 }
 
