@@ -85,8 +85,16 @@
 #endif
 
 // Stack size (bytes) of the FreeRTOS task used for async requests.
+//
+// This task runs the full request state machine including URL parsing, TLS
+// handshake (mbedTLS uses ~4 KB of stack), HTTP header parsing, chunked
+// decoding and any user callbacks. We default to 12 KB so there is a safety
+// margin on top of the ~8 KB the actual call chain needs.
+//
+// Override with -DSHC_ASYNC_TASK_STACK=16384 (or in library.properties) if
+// your callbacks use deep call chains or large stack buffers.
 #ifndef SHC_ASYNC_TASK_STACK
-#define SHC_ASYNC_TASK_STACK 8192
+#define SHC_ASYNC_TASK_STACK 12288
 #endif
 
 // Priority of the FreeRTOS task used for async requests.

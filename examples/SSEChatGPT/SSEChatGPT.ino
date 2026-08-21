@@ -86,6 +86,12 @@ void setup() {
 
     // Stream the response (don't buffer it all in RAM).
     http.useStreamMode(true);
+    // We are parsing SSE text ourselves - we want the raw bytes, not a
+    // decompressed body. Also avoid sending Accept-Encoding so the server
+    // does not gzip the stream (which would force us to allocate a
+    // decompression buffer).
+    http.setDecompress(false);
+    http.acceptEncoding("identity");
 
     const char* body =
         "{\"model\":\"gpt-3.5-turbo\","

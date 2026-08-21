@@ -187,12 +187,18 @@ int StreamHTTPClient_GzipDecompressor::decode(const uint8_t* in, size_t in_len,
 
 int StreamHTTPClient_GzipDecompressor::decodeTo(const uint8_t* in, size_t in_len,
                                                 bool final_chunk, Print& out) {
-    uint8_t out_buf[SHC_GZIP_OUT_BUF_SIZE];
+    // Heap-allocate the output buffer. The default size (16 KB) is too large
+    // to safely put on the stack of an Arduino task or a FreeRTOS task
+    // (typical stacks are 4-8 KB).
+    uint8_t* out_buf = (uint8_t*)malloc(SHC_GZIP_OUT_BUF_SIZE);
+    if (!out_buf) return -2;  // out-of-memory -> treat as decoder error
     struct Ctx { Print* out; };
     Ctx ctx{&out};
     auto cb = [](const uint8_t* data, size_t len, void* user) {
         Ctx* c = (Ctx*)user;
         c->out->write(data, len);
     };
-    return decode(in, in_len, final_chunk, out_buf, sizeof(out_buf), cb, &ctx);
+    int r = decode(in, in_len, final_chunk, out_buf, SHC_GZIP_OUT_BUF_SIZE, cb, &ctx);
+    free(out_buf);
+    return r;
 }

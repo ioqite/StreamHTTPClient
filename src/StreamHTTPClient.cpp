@@ -993,23 +993,32 @@ int StreamHTTPClient::readBodyChunked() {
     if (!_client) return SHC_ERROR_CONNECTION_LOST;
     char size_line[SHC_CHUNK_LINE_BUFFER];
     uint8_t in_buf[1024];
-    uint8_t out_buf[SHC_GZIP_OUT_BUF_SIZE];
+
+    // Decompression output buffer. Heap-allocated only when needed (the
+    // SHC_GZIP_OUT_BUF_SIZE default is 16 KB, which would overflow the
+    // 8 KB FreeRTOS async-task stack if placed on the stack).
+    uint8_t* out_buf = nullptr;
+    if (_decomp) {
+        out_buf = (uint8_t*)malloc(SHC_GZIP_OUT_BUF_SIZE);
+        if (!out_buf) return SHC_ERROR_TOO_LESS_RAM;
+    }
 
     while (true) {
-        if (_cancelled) return SHC_ERROR_USER_CANCEL;
+        if (_cancelled) { if (out_buf) free(out_buf); return SHC_ERROR_USER_CANCEL; }
         int n = read_line(_client, size_line, sizeof(size_line), _tcp_timeout);
-        if (n < 0) return SHC_ERROR_CONNECTION_LOST;
+        if (n < 0) { if (out_buf) free(out_buf); return SHC_ERROR_CONNECTION_LOST; }
         // Parse hex size (strip any extension after ';')
         char* semi = strchr(size_line, ';');
         if (semi) *semi = 0;
         long chunk_size = strtol(size_line, nullptr, 16);
-        if (chunk_size < 0) return SHC_ERROR_CHUNK_SIZE;
+        if (chunk_size < 0) { if (out_buf) free(out_buf); return SHC_ERROR_CHUNK_SIZE; }
         if (chunk_size == 0) {
             // Trailers
             while (true) {
                 int t = read_line(_client, size_line, sizeof(size_line), _tcp_timeout);
                 if (t <= 0) break;
             }
+            if (out_buf) free(out_buf);
             return (int)_body_received;
         }
 
@@ -1017,14 +1026,12 @@ int StreamHTTPClient::readBodyChunked() {
         while (remaining > 0) {
             size_t want = remaining > sizeof(in_buf) ? sizeof(in_buf) : remaining;
             size_t got = _client->readBytes(in_buf, want);
-            if (got == 0) return SHC_ERROR_CONNECTION_LOST;
+            if (got == 0) { if (out_buf) free(out_buf); return SHC_ERROR_CONNECTION_LOST; }
             remaining -= got;
 
             if (_decomp) {
-                bool final = (remaining == 0) && false; // we'll feed MZ_FINISH later
-                (void)final;
                 int r = _decomp->decode(in_buf, got, /*final_chunk=*/false,
-                                        out_buf, sizeof(out_buf),
+                                        out_buf, SHC_GZIP_OUT_BUF_SIZE,
                                         [](const uint8_t* d, size_t l, void* user) {
                                             StreamHTTPClient* self = (StreamHTTPClient*)user;
                                             if (self->_on_data) {
@@ -1034,7 +1041,6 @@ int StreamHTTPClient::readBodyChunked() {
                                                 // Append to body buffer if user calls getString() later
                                                 // (no-op for pure stream mode)
                                             } else {
-                                                self->_body_buf_len; // placeholder
                                                 // Append to body buffer
                                                 if (self->_body_buf == nullptr) {
                                                     self->_body_buf = (uint8_t*)malloc(SHC_DEFAULT_STRING_BUFFER);
@@ -1057,7 +1063,7 @@ int StreamHTTPClient::readBodyChunked() {
                                                 }
                                             }
                                         }, this);
-                if (r == -2) return SHC_ERROR_DECOMPRESSION;
+                if (r == -2) { if (out_buf) free(out_buf); return SHC_ERROR_DECOMPRESSION; }
                 _body_received += got; // count input bytes
             } else {
                 // No decompression - pass through
@@ -1073,7 +1079,7 @@ int StreamHTTPClient::readBodyChunked() {
                             while (newsz < _body_buf_len + got) newsz *= 2;
                             uint8_t* nb = (uint8_t*)realloc(_body_buf, newsz);
                             if (nb) { _body_buf = nb; _body_buf_size = newsz; }
-                            else { return SHC_ERROR_TOO_LESS_RAM; }
+                            else { if (out_buf) free(out_buf); return SHC_ERROR_TOO_LESS_RAM; }
                         }
                         memcpy(_body_buf + _body_buf_len, in_buf, got);
                         _body_buf_len += got;
@@ -1091,19 +1097,26 @@ int StreamHTTPClient::readBodyChunked() {
 int StreamHTTPClient::readBodyContentLength(size_t len) {
     if (!_client) return SHC_ERROR_CONNECTION_LOST;
     uint8_t in_buf[1024];
-    uint8_t out_buf[SHC_GZIP_OUT_BUF_SIZE];
+
+    // Heap-allocated decompression buffer (see readBodyChunked for rationale).
+    uint8_t* out_buf = nullptr;
+    if (_decomp) {
+        out_buf = (uint8_t*)malloc(SHC_GZIP_OUT_BUF_SIZE);
+        if (!out_buf) return SHC_ERROR_TOO_LESS_RAM;
+    }
+
     size_t remaining = len;
     while (remaining > 0) {
-        if (_cancelled) return SHC_ERROR_USER_CANCEL;
+        if (_cancelled) { if (out_buf) free(out_buf); return SHC_ERROR_USER_CANCEL; }
         size_t want = remaining > sizeof(in_buf) ? sizeof(in_buf) : remaining;
         size_t got = _client->readBytes(in_buf, want);
-        if (got == 0) return SHC_ERROR_CONNECTION_LOST;
+        if (got == 0) { if (out_buf) free(out_buf); return SHC_ERROR_CONNECTION_LOST; }
         remaining -= got;
 
         if (_decomp) {
             bool final_chunk = (remaining == 0);
             int r = _decomp->decode(in_buf, got, final_chunk,
-                                    out_buf, sizeof(out_buf),
+                                    out_buf, SHC_GZIP_OUT_BUF_SIZE,
                                     [](const uint8_t* d, size_t l, void* user) {
                                         StreamHTTPClient* self = (StreamHTTPClient*)user;
                                         if (self->_on_data) {
@@ -1125,7 +1138,7 @@ int StreamHTTPClient::readBodyContentLength(size_t len) {
                                             self->_body_buf_len += l;
                                         }
                                     }, this);
-            if (r == -2) return SHC_ERROR_DECOMPRESSION;
+            if (r == -2) { if (out_buf) free(out_buf); return SHC_ERROR_DECOMPRESSION; }
         } else {
             if (_on_data) _on_data(in_buf, got);
             if (_body_buf == nullptr && !_stream_mode) {
@@ -1138,7 +1151,7 @@ int StreamHTTPClient::readBodyContentLength(size_t len) {
                     while (newsz < _body_buf_len + got) newsz *= 2;
                     uint8_t* nb = (uint8_t*)realloc(_body_buf, newsz);
                     if (nb) { _body_buf = nb; _body_buf_size = newsz; }
-                    else return SHC_ERROR_TOO_LESS_RAM;
+                    else { if (out_buf) free(out_buf); return SHC_ERROR_TOO_LESS_RAM; }
                 }
                 memcpy(_body_buf + _body_buf_len, in_buf, got);
                 _body_buf_len += got;
@@ -1146,15 +1159,23 @@ int StreamHTTPClient::readBodyContentLength(size_t len) {
         }
         _body_received += got;
     }
+    if (out_buf) free(out_buf);
     return (int)_body_received;
 }
 
 int StreamHTTPClient::readBodyUntilClose() {
     if (!_client) return SHC_ERROR_CONNECTION_LOST;
     uint8_t in_buf[1024];
-    uint8_t out_buf[SHC_GZIP_OUT_BUF_SIZE];
+
+    // Heap-allocated decompression buffer (see readBodyChunked for rationale).
+    uint8_t* out_buf = nullptr;
+    if (_decomp) {
+        out_buf = (uint8_t*)malloc(SHC_GZIP_OUT_BUF_SIZE);
+        if (!out_buf) return SHC_ERROR_TOO_LESS_RAM;
+    }
+
     while (_client->connected() || _client->available() > 0) {
-        if (_cancelled) return SHC_ERROR_USER_CANCEL;
+        if (_cancelled) { if (out_buf) free(out_buf); return SHC_ERROR_USER_CANCEL; }
         int avail = _client->available();
         if (avail <= 0) { delay(1); continue; }
         size_t want = (size_t)avail;
@@ -1164,7 +1185,7 @@ int StreamHTTPClient::readBodyUntilClose() {
 
         if (_decomp) {
             int r = _decomp->decode(in_buf, got, /*final_chunk=*/false,
-                                    out_buf, sizeof(out_buf),
+                                    out_buf, SHC_GZIP_OUT_BUF_SIZE,
                                     [](const uint8_t* d, size_t l, void* user) {
                                         StreamHTTPClient* self = (StreamHTTPClient*)user;
                                         if (self->_on_data) {
@@ -1186,7 +1207,7 @@ int StreamHTTPClient::readBodyUntilClose() {
                                             self->_body_buf_len += l;
                                         }
                                     }, this);
-            if (r == -2) return SHC_ERROR_DECOMPRESSION;
+            if (r == -2) { if (out_buf) free(out_buf); return SHC_ERROR_DECOMPRESSION; }
         } else {
             if (_on_data) _on_data(in_buf, got);
             if (_body_buf == nullptr && !_stream_mode) {
@@ -1199,7 +1220,7 @@ int StreamHTTPClient::readBodyUntilClose() {
                     while (newsz < _body_buf_len + got) newsz *= 2;
                     uint8_t* nb = (uint8_t*)realloc(_body_buf, newsz);
                     if (nb) { _body_buf = nb; _body_buf_size = newsz; }
-                    else return SHC_ERROR_TOO_LESS_RAM;
+                    else { if (out_buf) free(out_buf); return SHC_ERROR_TOO_LESS_RAM; }
                 }
                 memcpy(_body_buf + _body_buf_len, in_buf, got);
                 _body_buf_len += got;
@@ -1207,6 +1228,7 @@ int StreamHTTPClient::readBodyUntilClose() {
         }
         _body_received += got;
     }
+    if (out_buf) free(out_buf);
     return (int)_body_received;
 }
 
