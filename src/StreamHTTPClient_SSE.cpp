@@ -1,3 +1,27 @@
+/**************************************************************************
+ * Copyright (c) 2026 Ioqit
+ * All Rights Reserved.
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ * 
+ **************************************************************************/
+
 /*
   StreamHTTPClient_SSE.cpp - Server-Sent Events implementation
 */
@@ -43,12 +67,16 @@ bool StreamHTTPClient_SSEImpl::doConnect() {
         if (_parent->_on_sse_error) _parent->_on_sse_error(code ? code : SHC_ERROR_CONNECTION_REFUSED);
         _connected = false;
         _next_reconnect_at = millis() + _retry_ms;
+        // Release the transport so the next attempt opens a fresh socket.
+        // We call releaseTransport() directly (NOT end()) so that the
+        // SSE object is not recursively freed.
+        _parent->releaseTransport();
         return false;
     }
     if (code != 200) {
         if (_parent->_on_sse_error) _parent->_on_sse_error(code);
         _connected = false;
-        _parent->end();
+        _parent->releaseTransport();
         return false;
     }
     _connected = true;
@@ -59,8 +87,14 @@ bool StreamHTTPClient_SSEImpl::doConnect() {
 }
 
 void StreamHTTPClient_SSEImpl::stop() {
+    // IMPORTANT: do NOT call _parent->end() here - end() calls _sse->stop()
+    // again, creating an infinite recursion. We only release the transport
+    // and clear our own state.
     _connected = false;
-    _parent->end();
+    _line_buf = "";
+    resetEvent();
+    _next_reconnect_at = 0;
+    _parent->releaseTransport();
 }
 
 void StreamHTTPClient_SSEImpl::handleLine(const String& line) {

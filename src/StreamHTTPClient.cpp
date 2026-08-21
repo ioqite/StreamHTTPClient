@@ -1,9 +1,4 @@
 /**************************************************************************
- * StreamHTTPClient.cpp - main implementation
- * The sync path drives a small state machine inline. The async path delegates
- * to StreamHTTPClient_AsyncImpl which either spawns a FreeRTOS task (ESP32) or
- * is driven cooperatively by the caller via asyncPoll().
- * 
  * Copyright (c) 2026 Ioqit
  * All Rights Reserved.
  * 
@@ -26,6 +21,14 @@
  * THE SOFTWARE.
  * 
  **************************************************************************/
+
+/*
+  StreamHTTPClient.cpp - main implementation
+
+  The sync path drives a small state machine inline. The async path delegates
+  to StreamHTTPClient_AsyncImpl which either spawns a FreeRTOS task (ESP32) or
+  is driven cooperatively by the caller via asyncPoll().
+*/
 
 #include "StreamHTTPClient.h"
 #include "StreamHTTPClient_Async.h"
@@ -233,10 +236,27 @@ StreamHTTPClient::StreamHTTPClient()
 }
 
 StreamHTTPClient::~StreamHTTPClient() {
-    end();
+    // 1. Stop any in-flight async task and SSE connection.
+    //    These call back into releaseTransport() only (never into end()),
+    //    so there is no re-entrancy hazard.
+    if (_async) {
+        _async->stop();
+        delete _async;
+        _async = nullptr;
+    }
+    if (_sse) {
+        _sse->stop();
+        delete _sse;
+        _sse = nullptr;
+    }
+    // 2. Release the rest of the resources.
+    releaseTransport();
+    releaseDecompressor();
     if (_body_buf) {
         free(_body_buf);
         _body_buf = nullptr;
+        _body_buf_size = 0;
+        _body_buf_len = 0;
     }
 }
 
@@ -349,6 +369,9 @@ bool StreamHTTPClient::begin(WiFiClient* client, const String& url) {
 }
 
 void StreamHTTPClient::end() {
+    // Stop async / SSE helpers but keep the helper objects alive (they are
+    // deleted in the destructor). stop() only releases their internal state
+    // and the transport; it never calls back into end(), so this is safe.
     if (_async) {
         _async->stop();
     }

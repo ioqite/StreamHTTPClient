@@ -1,6 +1,6 @@
 {
   "name": "StreamHTTPClient",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A streaming HTTP/HTTPS client for Arduino with sync/async support, bidirectional streaming, SSE, chunked transfer, gzip decompression, keep-alive, redirects and BasicAuth. API-compatible with HTTPClient.",
   "keywords": ["http", "https", "streaming", "sse", "async", "gzip", "chunked", "wifi", "client", "tls"],
   "authors": [

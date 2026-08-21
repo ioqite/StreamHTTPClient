@@ -1,25 +1,4 @@
 /**************************************************************************
-  StreamHTTPClient.h - main public header
-
-  Streaming HTTP/HTTPS client for Arduino, API-compatible with HTTPClient.
-
-  Features:
-    - HTTP and HTTPS (TLS via WiFiClientSecure)
-    - Bidirectional streaming (request body via Stream, response body via
-      getStreamPtr() or onData callbacks)
-    - Chunked transfer encoding (send and receive)
-    - gzip / deflate decompression (powered by miniz)
-    - Content-Length and Keep-Alive
-    - Configurable redirect following
-    - Basic Authentication
-    - Custom request headers
-    - Server-Sent Events (SSE) integrated into the main class
-    - Synchronous and asynchronous request execution
-        - Async uses a FreeRTOS task when available
-        - Cooperative polling fallback for bare-metal Arduino cores
-
-  Reference: github.com/espressif/arduino-esp32/libraries/HTTPClient
-
  * Copyright (c) 2026 Ioqit
  * All Rights Reserved.
  * 
@@ -42,6 +21,29 @@
  * THE SOFTWARE.
  * 
  **************************************************************************/
+
+/*
+  StreamHTTPClient.h - main public header
+
+  Streaming HTTP/HTTPS client for Arduino, API-compatible with HTTPClient.
+
+  Features:
+    - HTTP and HTTPS (TLS via WiFiClientSecure)
+    - Bidirectional streaming (request body via Stream, response body via
+      getStreamPtr() or onData callbacks)
+    - Chunked transfer encoding (send and receive)
+    - gzip / deflate decompression (powered by miniz)
+    - Content-Length and Keep-Alive
+    - Configurable redirect following
+    - Basic Authentication
+    - Custom request headers
+    - Server-Sent Events (SSE) integrated into the main class
+    - Synchronous and asynchronous request execution
+        - Async uses a FreeRTOS task when available
+        - Cooperative polling fallback for bare-metal Arduino cores
+
+  Reference: github.com/espressif/arduino-esp32/libraries/HTTPClient
+*/
 
 #pragma once
 
